@@ -1,0 +1,53 @@
+const assert = require('node:assert/strict');
+(async()=>{
+ const targets=await (await fetch((process.env.DEBUG_URL || 'http://127.0.0.1:9223') + '/json')).json();
+ const socket=new WebSocket(targets.find(t=>t.type==='page').webSocketDebuggerUrl);
+ await new Promise(resolve=>socket.onopen=resolve);
+ let sequence=0;const pending=new Map();const errors=[];
+ socket.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=pending.get(m.id);pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text+': '+m.params.exceptionDetails.exception?.description);};
+ const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params}));});
+ const evaluate=async expression=>{const result=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(result.exceptionDetails)throw new Error(result.exceptionDetails.exception.description);return result.result.value;};
+ await send('Runtime.enable');await send('Page.enable');
+
+ await send('Page.navigate',{url:process.env.APP_URL || 'http://127.0.0.1:8765/index.html'});
+ const waitFor=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw new Error('Timed out: '+expression);};
+ await waitFor('!!document.getElementById("authForm")');
+ await evaluate("showLogin('signup');document.getElementById('authName').value='Structure Check';document.getElementById('authEmail').value='check-'+Date.now()+'@example.com';document.getElementById('authPassword').value='test-password-123';document.getElementById('authRole').value='ADMIN';document.getElementById('authForm').requestSubmit()");
+ await waitFor('!!document.getElementById("onboardingForm")');
+ await evaluate("document.getElementById('workspaceName').value='Test lab';document.getElementById('headHostname').value='head-01';document.getElementById('nodeNames').value=['compute-01','compute-02'].join(String.fromCharCode(10));document.getElementById('onboardingForm').requestSubmit()");
+ await waitFor('!!document.querySelector(".agent-checks")');
+ assert.equal(await evaluate('document.querySelectorAll(".agent-check").length'),4);
+ assert.equal(await evaluate('computers.length'),3);
+ for(const page of ['dashboard','labs','monitoring','myreports','report','faults','computers','users','analytics']) {
+  await evaluate(`navigateTo('${page}')`);
+  assert.ok(await evaluate('document.getElementById("pages").textContent.trim().length>0'),page);
+ }
+ await evaluate("navigateTo('monitoring');document.getElementById('previewSearch').value='no-match';document.getElementById('previewSearch').dispatchEvent(new Event('input'))");
+ assert.match(await evaluate('document.getElementById("previewRows").textContent'),/No compute nodes/);
+ await evaluate("reportFaultForComputer(1);document.getElementById('reportType').value='Mouse Problem';document.getElementById('reportDesc').value='Mouse pointer freezes during class.';document.getElementById('reportNotes').value='USB mouse';document.getElementById('reportForm').requestSubmit()");
+ assert.match(await evaluate('document.getElementById("reportResult").textContent'),/Report saved/);
+ const report=await evaluate('faults.at(-1)');
+ assert.equal(report.notes[0],'USB mouse');
+ await evaluate(`navigateTo('faults');updateFaultStatus(${report.id},'ACKNOWLEDGED',false)`);
+ await evaluate(`updateFaultStatus(${report.id},'IN_PROGRESS',false)`);
+ await evaluate(`changeFaultStatus(faults.find(f=>f.id===${report.id}),'RESOLVED',currentUser,'Replaced the mouse.')`);
+ assert.equal(await evaluate('computers[0].status'),'HEALTHY');
+ assert.equal(await evaluate(`faults.find(f=>f.id===${report.id}).status`),'RESOLVED');
+ assert.equal(await evaluate(`faults.find(f=>f.id===${report.id}).history.length`),4);
+ assert.equal(await evaluate(`changeFaultStatus(faults.find(f=>f.id===${report.id}),'ACKNOWLEDGED',currentUser,'').ok`),false);
+ await send('Page.reload');
+ await waitFor('!!document.querySelector(".agent-checks")');
+ assert.equal(await evaluate(`faults.find(f=>f.id===${report.id}).status`),'RESOLVED');
+ await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+ await evaluate("navigateTo('dashboard')");
+ await new Promise(r=>setTimeout(r,350));
+ assert.ok(await evaluate('document.documentElement.scrollWidth<=window.innerWidth'),'Mobile overflow');
+ await evaluate('document.getElementById("sidebarToggle").click()');
+ assert.equal(await evaluate('document.getElementById("sidebar").classList.contains("open")'),true);
+ await evaluate('document.getElementById("logoutBtn").click()');
+ assert.ok(await evaluate('!!document.getElementById("authForm")'));
+ assert.equal(await evaluate('localStorage.getItem(SESSION_KEY)'),null);
+ assert.deepEqual(errors,[]);
+ console.log('PASS: signup, onboarding, all nine pages, search, report submission, status updates, persistence, mobile navigation, logout, and no runtime errors.');
+ socket.close();
+})().catch(e=>{console.error(e);process.exit(1)});

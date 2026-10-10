@@ -1,0 +1,5 @@
+function renderComputerDetail(c) {
+    const active = faults.filter(f => f.computerId === c.id && !['RESOLVED', 'CLOSED'].includes(f.status));
+    const typeLabel = c.id === localComputerId ? 'Head node' : 'Compute node';
+    return `<section class="card mt-3"><div class="flex-between"><div><h3>${c.hostname}</h3><p class="text-sm text-muted">${typeLabel} · ${LABS.find(l => l.id === c.labId).name} · ${c.os}</p></div>${getStatusBadge(c.status)}</div><div class="grid-4 mt-3">${[['Node type', typeLabel], ['Availability', c.online ? 'Online' : 'Offline'], ['Network', c.network], ['Storage', c.freeGB === null ? 'Unknown' : `${c.freeGB} GB of 512 GB`], ['Monitoring service', c.agent]].map(([label, value]) => `<div><span class="text-xs text-muted">${label}</span><br><strong>${value}</strong></div>`).join('')}</div><p class="text-xs text-muted mt-2">Last sample contact: ${new Date(c.lastSeen).toLocaleString()} · ${active.length} open fault report(s)</p><button class="btn btn-teal mt-2" onclick="reportFaultForComputer(${c.id})">Report a fault</button></section>`;
+}

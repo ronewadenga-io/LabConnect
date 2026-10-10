@@ -1,0 +1,6 @@
+.browser-check/
+node_modules/
+tests/artifacts/
+__pycache__/
+preview-desktop.png
+preview-mobile.png
